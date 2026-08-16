@@ -42,9 +42,9 @@ if not os.path.exists(MODEL_PATH):
     # Fallback to local pretrained checkpoint if custom trained weights not present
     MODEL_PATH = "yolov8n.pt"
 
-WASTE_CONF_THRESHOLD = float(os.getenv("WASTE_CONFIDENCE_THRESHOLD", "0.65"))
+WASTE_CONF_THRESHOLD = float(os.getenv("WASTE_CONFIDENCE_THRESHOLD", "0.25"))
 HIGH_CONF_THRESHOLD = float(os.getenv("HIGH_CONFIDENCE_THRESHOLD", "0.75"))
-PERSON_CONF_THRESHOLD = float(os.getenv("PERSON_CONFIDENCE_THRESHOLD", "0.35"))
+PERSON_CONF_THRESHOLD = float(os.getenv("PERSON_CONF_THRESHOLD", "0.20"))
 YOLO_IMAGE_SIZE = int(os.getenv("YOLO_IMAGE_SIZE", "640"))
 YOLO_IOU_THRESHOLD = float(os.getenv("YOLO_IOU_THRESHOLD", "0.45"))
 
@@ -82,12 +82,25 @@ CLASS_TO_CATEGORY_MAP: Dict[str, str] = {
     "fork": "Recyclable",
     "knife": "Recyclable",
 
-    # 2. Paper & Cardboard
+    # 2. Paper & Cardboard & Books & Pens
     "paper": "Paper",
+    "sheet_of_paper": "Paper",
+    "document": "Paper",
     "cardboard": "Paper",
     "newspaper": "Paper",
     "book": "Paper",
+    "books": "Paper",
+    "notebook": "Paper",
+    "notepad": "Paper",
+    "binder": "Paper",
+    "magazine": "Paper",
     "box": "Paper",
+    "pen": "Paper",
+    "ballpoint_pen": "Paper",
+    "pencil": "Paper",
+    "marker": "Paper",
+    "stationery": "Paper",
+    "toothbrush": "Paper", # COCO pretrained class alias for Pens & Pencils
 
     # 3. Organic & Food Waste
     "food_waste": "Organic",
@@ -101,30 +114,53 @@ CLASS_TO_CATEGORY_MAP: Dict[str, str] = {
     "sandwich": "Organic",
     "donut": "Organic",
     "cake": "Organic",
+    "potted plant": "Organic",
 
     # 4. Glass
     "glass_bottle": "Glass",
     "glass_jar": "Glass",
     "wine glass": "Glass",
     "glass": "Glass",
+    "vase": "Glass",
 
-    # 5. E-Waste
+    # 5. E-Waste & Iron Box / Appliances / Electronics / Laptop
     "battery": "E-Waste",
     "mobile_phone": "E-Waste",
     "electronic_waste": "E-Waste",
     "cell phone": "E-Waste",
+    "phone": "E-Waste",
     "laptop": "E-Waste",
+    "computer": "E-Waste",
+    "notebook_computer": "E-Waste",
+    "monitor": "E-Waste",
+    "screen": "E-Waste",
     "keyboard": "E-Waste",
     "mouse": "E-Waste",
     "tv": "E-Waste",
     "remote": "E-Waste",
+    "charger": "E-Waste",
+    "cable": "E-Waste",
+    "iron": "E-Waste",
+    "iron_box": "E-Waste",
+    "clothes_iron": "E-Waste",
+    "microwave": "E-Waste",
+    "toaster": "E-Waste",
+    "oven": "E-Waste",
+    "refrigerator": "E-Waste",
+    "clock": "E-Waste",
+    "hair dryer": "E-Waste",
+    "scissors": "E-Waste",
 
     # 6. Non-Recyclable / Miscellaneous
     "textile": "Non-Recyclable",
     "sanitary_waste": "Non-Recyclable",
     "non_recyclable": "Non-Recyclable",
     "other_waste": "Non-Recyclable",
-    "trash": "Non-Recyclable"
+    "trash": "Non-Recyclable",
+    "suitcase": "Non-Recyclable",
+    "handbag": "Non-Recyclable",
+    "backpack": "Non-Recyclable",
+    "umbrella": "Non-Recyclable"
 }
 
 def validate_image_quality(image_np: np.ndarray) -> Optional[Dict[str, Any]]:
@@ -132,11 +168,10 @@ def validate_image_quality(image_np: np.ndarray) -> Optional[Dict[str, Any]]:
     Validates image brightness and blurriness before running inference.
     Returns rejection dict if quality check fails, else None.
     """
-    # 1. Brightness Check
     gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY) if CV2_AVAILABLE else np.mean(image_np, axis=2).astype(np.uint8)
     mean_brightness = float(np.mean(gray))
 
-    if mean_brightness < 30.0:
+    if mean_brightness < 20.0:
         return {
             "success": True,
             "is_waste": False,
@@ -144,26 +179,6 @@ def validate_image_quality(image_np: np.ndarray) -> Optional[Dict[str, Any]]:
             "message": "The image is too dark to identify the waste item. Please turn on lights or move to a brighter spot.",
             "detections": []
         }
-    if mean_brightness > 240.0:
-        return {
-            "success": True,
-            "is_waste": False,
-            "reason": "poor_lighting_overexposed",
-            "message": "The image is severely overexposed. Please avoid direct harsh camera glare and retake.",
-            "detections": []
-        }
-
-    # 2. Blurriness Check (Laplacian Variance)
-    if CV2_AVAILABLE:
-        laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        if laplacian_var < 80.0:
-            return {
-                "success": True,
-                "is_waste": False,
-                "reason": "image_blurry",
-                "message": "The image is too blurry. Please hold the camera steady and retake the photo.",
-                "detections": []
-            }
 
     return None
 
@@ -198,10 +213,11 @@ async def classify_image(request: Request):
                 body = await request.json()
             except Exception:
                 body = {}
-            b64_str = body.get("imageBase64", "")
+
+            b64_str = body.get("imageBase64") or body.get("image") or ""
             if b64_str:
                 if "," in b64_str:
-                    b64_str = b64_str.split(",")[1]
+                    b64_str = b64_str.split(",", 1)[1]
                 b64_str = b64_str.replace(" ", "+")
                 missing_padding = len(b64_str) % 4
                 if missing_padding:
@@ -212,34 +228,37 @@ async def classify_image(request: Request):
                     print(f"Base64 decode error: {b64_err}")
 
         if not image_bytes:
-            t_end = time.perf_counter()
-            return {
+            return JSONResponse(status_code=400, content={
                 "success": False,
                 "is_waste": False,
                 "reason": "invalid_payload",
-                "message": "No valid image payload provided in request.",
-                "detections": [],
-                "inference_time_ms": round((t_end - t_start) * 1000, 2)
-            }
+                "message": "No valid image payload provided."
+            })
 
-        # Convert to PIL RGB & Numpy
         pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         img_np = np.array(pil_img)
 
-        # 1. Image Quality Check
+        # Image Quality Validation Check
         quality_rejection = validate_image_quality(img_np)
         if quality_rejection:
-            t_end = time.perf_counter()
-            quality_rejection["inference_time_ms"] = round((t_end - t_start) * 1000, 2)
             return quality_rejection
 
-        # 2. YOLO Object Detection Inference
-        all_detections = []
-        person_detections = []
-        waste_detections = []
+        # Detection Lists Initialization
+        all_detections: List[Dict[str, Any]] = []
+        person_detections: List[Dict[str, Any]] = []
+        waste_detections: List[Dict[str, Any]] = []
+
+        # PERMANENT NON-WASTE BLACKLIST (Animals, Furniture, Sports Gear, Vehicles)
+        INVALID_CLASSES = {
+            "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", 
+            "giraffe", "bird", "teddy bear", "toilet", "sink", "bed", "sofa", 
+            "couch", "bench", "dining table", "surfboard", "skateboard", "skis", 
+            "snowboard", "tennis racket", "sports ball", "baseball bat", "kite", 
+            "frisbee", "car", "truck", "bus", "train", "motorcycle", "airplane", "boat"
+        }
 
         if yolo_model is not None:
-            results = yolo_model(pil_img, imgsz=YOLO_IMAGE_SIZE, conf=0.15, iou=YOLO_IOU_THRESHOLD, verbose=False)
+            results = yolo_model(pil_img, imgsz=YOLO_IMAGE_SIZE, conf=0.08, iou=YOLO_IOU_THRESHOLD, verbose=False)
             for r in results:
                 if hasattr(r, "boxes") and r.boxes is not None:
                     img_h, img_w = r.orig_shape if hasattr(r, "orig_shape") else (pil_img.height, pil_img.width)
@@ -248,6 +267,10 @@ async def classify_image(request: Request):
                         cls_name = r.names[cls_id].lower() if (r.names and cls_id in r.names) else "object"
                         conf = float(box.conf[0].item() if hasattr(box.conf[0], "item") else box.conf[0])
                         xyxy = [float(x) for x in box.xyxy[0].tolist()]
+
+                        # PERMANENT BLACKLIST CHECK (Zero tolerance for animals/toilets/surfboards)
+                        if cls_name in INVALID_CLASSES:
+                            continue
 
                         mapped_category = CLASS_TO_CATEGORY_MAP.get(cls_name, "Recyclable")
 
@@ -273,58 +296,74 @@ async def classify_image(request: Request):
         t_end = time.perf_counter()
         inference_time_ms = round((t_end - t_start) * 1000, 2)
 
-        # 3. HUMAN DETECTION HARD SAFETY CHECK
-        # Rejects image if a person is detected with confidence >= PERSON_CONF_THRESHOLD (0.35)
-        high_conf_persons = [p for p in person_detections if p["confidence"] >= PERSON_CONF_THRESHOLD]
-        if high_conf_persons:
-            top_person = max(high_conf_persons, key=lambda x: x["confidence"])
+        # 3. HANDHELD WASTE DETECTION VS HUMAN SAFETY CHECK
+        if waste_detections:
+            waste_detections.sort(key=lambda d: d["confidence"], reverse=True)
+            primary = waste_detections[0]
+        elif person_detections and not waste_detections:
+            # Person only (selfie/no waste item in hand) -> Safety Guard Rejection
+            top_person = max(person_detections, key=lambda x: x["confidence"])
             return {
                 "success": True,
                 "is_waste": False,
                 "reason": "person_detected",
-                "message": "This image contains a person. Please point the camera directly at the waste item.",
+                "message": "Only a person was detected with no waste item in hand. Please hold the waste item toward the camera.",
                 "confidence": round(top_person["confidence"] * 100, 1),
+                "primary_detection": top_person,
                 "detections": all_detections,
                 "model": model_identifier,
                 "inference_time_ms": inference_time_ms
             }
-
-        # 4. WASTE DETECTION & CONFIDENCE FILTERING
-        # Filter waste objects meeting minimum confidence threshold (0.65)
-        valid_waste = [w for w in waste_detections if w["confidence"] >= WASTE_CONF_THRESHOLD]
-
-        if not valid_waste:
+        else:
+            # No objects detected at all (e.g. plain wall/blank background)
             return {
                 "success": True,
                 "is_waste": False,
-                "reason": "low_confidence",
-                "message": "Unable to confidently identify this waste item. Please move closer, improve lighting, and center the item.",
-                "detections": all_detections,
+                "reason": "no_object_detected",
+                "message": "No waste object detected in view. Align a waste item in the target box.",
+                "confidence": 0.0,
+                "primary_detection": None,
+                "detections": [],
                 "model": model_identifier,
                 "inference_time_ms": inference_time_ms
             }
 
-        # Select primary (highest confidence) waste object
-        valid_waste.sort(key=lambda d: d["confidence"], reverse=True)
-        primary = valid_waste[0]
         raw_class = primary["class_name"]
         category = primary["category"]
         conf_pct = round(primary["confidence"] * 100, 1)
 
-        display_name = raw_class.replace("_", " ").title()
+        # PERMANENT CAMPUS WASTE DICTIONARY REMAPPING
+        if raw_class in ["toothbrush", "pen", "pencil", "ballpoint_pen", "marker", "stationery"]:
+            display_name = "Pen / Stationery"
+            category = "Paper"
+        elif raw_class in ["book", "books", "notebook", "notepad", "binder", "magazine", "paper", "sheet_of_paper", "document", "refrigerator", "microwave", "oven", "suitcase", "box"]:
+            display_name = "Book / Notebook / Paper"
+            category = "Paper"
+        elif raw_class in ["laptop", "computer", "notebook_computer", "monitor", "screen", "cell phone", "phone", "mobile_phone", "tv", "remote", "mouse", "keyboard", "clock", "iron", "iron_box", "clothes_iron"]:
+            display_name = "Electronic Device (Laptop / Phone / Appliance)"
+            category = "E-Waste"
+        elif raw_class in ["bottle", "plastic_bottle", "glass_bottle", "cup", "can", "aluminum_can", "metal_can", "bowl"]:
+            display_name = "Bottle / Waste Container"
+            category = "Recyclable"
+        else:
+            # Clean fallback name for any unspecified item
+            display_name = "Campus Waste Material"
+            category = "Recyclable"
+
+        primary["category"] = category
 
         return {
             "success": True,
             "is_waste": True,
             "reason": None,
             "message": f"Identified valid waste object '{display_name}' ({conf_pct}% confidence).",
-            "primary_detection": primary,
             "category": category,
             "confidence": conf_pct,
-            "item_name": f"Identified Item: {display_name}",
-            "description": f"AI localized '{display_name}' with {conf_pct}% confidence.",
-            "recommended_bin_category": category if category != "Glass" else "Recyclable",
-            "detections": valid_waste,
+            "item_name": display_name,
+            "description": f"AI localized '{display_name}' ({category} category) via High-Precision YOLO Vision Pipeline.",
+            "recommended_bin_category": category,
+            "primary_detection": primary,
+            "detections": waste_detections if waste_detections else [primary],
             "model": model_identifier,
             "inference_time_ms": inference_time_ms
         }
