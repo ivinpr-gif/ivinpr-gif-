@@ -11,8 +11,7 @@ WORKDIR /app
 
 # Install CPU-only PyTorch first — avoids the huge default CUDA build,
 # which blows past Render's free-tier build/memory limits
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
+RUN pip install --no-cache-dir torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
