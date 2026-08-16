@@ -409,7 +409,7 @@ async def classify_image(request: Request):
             "description": f"AI localized '{display_name}' ({category} category) via High-Precision YOLO Vision Pipeline.",
             "recommended_bin_category": category,
             "primary_detection": primary,
-            "detections": waste_detections if waste_detections else [primary],
+            "detections": [primary],
             "model": model_identifier,
             "inference_time_ms": inference_time_ms
         }
