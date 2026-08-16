@@ -67,20 +67,20 @@ if YOLO_AVAILABLE:
 
 # FINE-GRAINED VISUAL MODEL CLASS -> BIN CATEGORY MAPPING
 CLASS_TO_CATEGORY_MAP: Dict[str, str] = {
-    # 1. Recyclables (Plastics, Metals, Containers)
-    "plastic_bottle": "Recyclable",
-    "plastic_container": "Recyclable",
-    "plastic_cup": "Recyclable",
-    "plastic_bag": "Recyclable",
-    "aluminum_can": "Recyclable",
-    "metal_can": "Recyclable",
-    "bottle": "Recyclable",
-    "cup": "Recyclable",
-    "can": "Recyclable",
-    "bowl": "Recyclable",
-    "spoon": "Recyclable",
-    "fork": "Recyclable",
-    "knife": "Recyclable",
+    # 1. Plastic Bottles, Containers & Packaging
+    "plastic_bottle": "Plastic",
+    "plastic_container": "Plastic",
+    "plastic_cup": "Plastic",
+    "plastic_bag": "Plastic",
+    "aluminum_can": "Plastic",
+    "metal_can": "Plastic",
+    "bottle": "Plastic",
+    "cup": "Plastic",
+    "can": "Plastic",
+    "bowl": "Plastic",
+    "spoon": "Plastic",
+    "fork": "Plastic",
+    "knife": "Plastic",
 
     # 2. Paper & Cardboard & Books & Pens
     "paper": "Paper",
@@ -390,11 +390,11 @@ async def classify_image(request: Request):
             display_name = "Electronic Device (Laptop / Phone / Appliance)"
             category = "E-Waste"
         elif raw_class in ["bottle", "plastic_bottle", "glass_bottle", "cup", "can", "aluminum_can", "metal_can", "bowl"]:
-            display_name = "Bottle / Waste Container"
-            category = "Recyclable"
+            display_name = "Plastic Bottle / Container"
+            category = "Plastic"
         else:
-            display_name = "Campus Waste Material"
-            category = "Recyclable"
+            display_name = "Campus Plastic Waste"
+            category = "Plastic"
 
         primary["category"] = category
 
