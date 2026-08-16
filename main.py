@@ -116,12 +116,16 @@ CLASS_TO_CATEGORY_MAP: Dict[str, str] = {
     "cake": "Organic",
     "potted plant": "Organic",
 
-    # 4. Glass
-    "glass_bottle": "Glass",
-    "glass_jar": "Glass",
-    "wine glass": "Glass",
-    "glass": "Glass",
-    "vase": "Glass",
+    # 4. Plastic Waste
+    "glass_bottle": "Plastic",
+    "glass_jar": "Plastic",
+    "wine glass": "Plastic",
+    "glass": "Plastic",
+    "vase": "Plastic",
+    "plastic_bottle": "Plastic",
+    "plastic_container": "Plastic",
+    "plastic_cup": "Plastic",
+    "plastic_bag": "Plastic",
 
     # 5. E-Waste & Iron Box / Appliances / Electronics / Laptop
     "battery": "E-Waste",
