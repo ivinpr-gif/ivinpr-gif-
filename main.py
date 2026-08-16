@@ -280,8 +280,11 @@ async def classify_image(request: Request):
                         xyxy = [float(x) for x in box.xyxy[0].tolist()]
 
                         # Negate toothbrush -> Remap immediately to pen
-                        if cls_name == "toothbrush":
+                        if cls_name in ["toothbrush", "scissors", "knife", "spoon"]:
                             cls_name = "pen"
+                        # Negate refrigerator -> Remap immediately to book
+                        elif cls_name in ["refrigerator", "fridge", "microwave", "oven", "suitcase"]:
+                            cls_name = "book"
 
                         if cls_name == "person":
                             # Record person for safety check ONLY if no waste item is held
