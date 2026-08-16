@@ -279,6 +279,10 @@ async def classify_image(request: Request):
                         conf = float(box.conf[0].item() if hasattr(box.conf[0], "item") else box.conf[0])
                         xyxy = [float(x) for x in box.xyxy[0].tolist()]
 
+                        # Negate toothbrush -> Remap immediately to pen
+                        if cls_name == "toothbrush":
+                            cls_name = "pen"
+
                         if cls_name == "person":
                             # Record person for safety check ONLY if no waste item is held
                             det_item = {
