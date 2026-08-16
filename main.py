@@ -248,17 +248,28 @@ async def classify_image(request: Request):
         person_detections: List[Dict[str, Any]] = []
         waste_detections: List[Dict[str, Any]] = []
 
-        # PERMANENT NON-WASTE BLACKLIST (Animals, Furniture, Sports Gear, Vehicles)
-        INVALID_CLASSES = {
-            "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", 
-            "giraffe", "bird", "teddy bear", "toilet", "sink", "bed", "sofa", 
-            "couch", "bench", "dining table", "surfboard", "skateboard", "skis", 
-            "snowboard", "tennis racket", "sports ball", "baseball bat", "kite", 
-            "frisbee", "car", "truck", "bus", "train", "motorcycle", "airplane", "boat"
+        # STRICT CAMPUS ITEM WHITELIST (Only items possible on a campus)
+        CAMPUS_ITEM_WHITELIST = {
+            # 1. Recyclables (Plastics, Metals, Bottles, Cans, Cups, Containers)
+            "bottle", "plastic_bottle", "glass_bottle", "can", "aluminum_can", 
+            "metal_can", "cup", "plastic_cup", "plastic_container", "bowl", 
+            "spoon", "fork", "knife", "apple", "banana", "sandwich",
+
+            # 2. Paper, Books, Cardboard & Pens / Stationery
+            "book", "books", "notebook", "notepad", "binder", "magazine", "paper", 
+            "sheet_of_paper", "document", "cardboard", "box", "newspaper", 
+            "pen", "pencil", "marker", "stationery", "toothbrush", "scissors",
+
+            # 3. E-Waste & Electronics (Laptops, Phones, Appliances, Gadgets)
+            "laptop", "computer", "notebook_computer", "monitor", "screen", 
+            "cell phone", "phone", "mobile_phone", "keyboard", "mouse", "remote", 
+            "tv", "clock", "hair dryer", "iron", "iron_box", "clothes_iron", 
+            "microwave", "toaster", "oven", "refrigerator", "battery", "charger"
         }
 
         if yolo_model is not None:
-            results = yolo_model(pil_img, imgsz=YOLO_IMAGE_SIZE, conf=0.08, iou=YOLO_IOU_THRESHOLD, verbose=False)
+            # Low confidence threshold (0.04) to capture thin pens, pencils & paper items
+            results = yolo_model(pil_img, imgsz=YOLO_IMAGE_SIZE, conf=0.04, iou=YOLO_IOU_THRESHOLD, verbose=False)
             for r in results:
                 if hasattr(r, "boxes") and r.boxes is not None:
                     img_h, img_w = r.orig_shape if hasattr(r, "orig_shape") else (pil_img.height, pil_img.width)
@@ -268,59 +279,84 @@ async def classify_image(request: Request):
                         conf = float(box.conf[0].item() if hasattr(box.conf[0], "item") else box.conf[0])
                         xyxy = [float(x) for x in box.xyxy[0].tolist()]
 
-                        # PERMANENT BLACKLIST CHECK (Zero tolerance for animals/toilets/surfboards)
-                        if cls_name in INVALID_CLASSES:
-                            continue
-
-                        mapped_category = CLASS_TO_CATEGORY_MAP.get(cls_name, "Recyclable")
-
-                        det_item = {
-                            "class_name": cls_name,
-                            "confidence": round(conf, 4),
-                            "bbox": [round(xyxy[0], 1), round(xyxy[1], 1), round(xyxy[2], 1), round(xyxy[3], 1)],
-                            "normalized_bbox": [
-                                round(xyxy[0] / img_w, 4),
-                                round(xyxy[1] / img_h, 4),
-                                round(xyxy[2] / img_w, 4),
-                                round(xyxy[3] / img_h, 4)
-                            ],
-                            "category": mapped_category
-                        }
-                        all_detections.append(det_item)
-
                         if cls_name == "person":
+                            # Record person for safety check ONLY if no waste item is held
+                            det_item = {
+                                "class_name": "person",
+                                "confidence": round(conf, 4),
+                                "bbox": [round(xyxy[0], 1), round(xyxy[1], 1), round(xyxy[2], 1), round(xyxy[3], 1)],
+                                "normalized_bbox": [
+                                    round(xyxy[0] / img_w, 4),
+                                    round(xyxy[1] / img_h, 4),
+                                    round(xyxy[2] / img_w, 4),
+                                    round(xyxy[3] / img_h, 4)
+                                ],
+                                "category": "Non-Recyclable"
+                            }
                             person_detections.append(det_item)
-                        else:
+                            all_detections.append(det_item)
+                        elif cls_name in CAMPUS_ITEM_WHITELIST:
+                            # STRICT WHITELIST MATCH: Only campus waste items allowed
+                            mapped_category = CLASS_TO_CATEGORY_MAP.get(cls_name, "Recyclable")
+
+                            det_item = {
+                                "class_name": cls_name,
+                                "confidence": round(conf, 4),
+                                "bbox": [round(xyxy[0], 1), round(xyxy[1], 1), round(xyxy[2], 1), round(xyxy[3], 1)],
+                                "normalized_bbox": [
+                                    round(xyxy[0] / img_w, 4),
+                                    round(xyxy[1] / img_h, 4),
+                                    round(xyxy[2] / img_w, 4),
+                                    round(xyxy[3] / img_h, 4)
+                                ],
+                                "category": mapped_category
+                            }
                             waste_detections.append(det_item)
+                            all_detections.append(det_item)
 
         t_end = time.perf_counter()
         inference_time_ms = round((t_end - t_start) * 1000, 2)
 
         # 3. HANDHELD WASTE DETECTION VS HUMAN SAFETY CHECK
         if waste_detections:
+            # Waste object is present in hand -> COMPLETELY IGNORE HAND/PERSON BOXES!
             waste_detections.sort(key=lambda d: d["confidence"], reverse=True)
             primary = waste_detections[0]
         elif person_detections and not waste_detections:
             # Person only (selfie/no waste item in hand) -> Safety Guard Rejection
-            top_person = max(person_detections, key=lambda x: x["confidence"])
-            return {
-                "success": True,
-                "is_waste": False,
-                "reason": "person_detected",
-                "message": "Only a person was detected with no waste item in hand. Please hold the waste item toward the camera.",
-                "confidence": round(top_person["confidence"] * 100, 1),
-                "primary_detection": top_person,
-                "detections": all_detections,
-                "model": model_identifier,
-                "inference_time_ms": inference_time_ms
-            }
+            high_conf_person = [p for p in person_detections if p["confidence"] >= 0.40]
+            if high_conf_person:
+                top_person = max(high_conf_person, key=lambda x: x["confidence"])
+                return {
+                    "success": True,
+                    "is_waste": False,
+                    "reason": "person_detected",
+                    "message": "Only a person was detected with no waste item in hand. Please hold the waste item toward the camera.",
+                    "confidence": round(top_person["confidence"] * 100, 1),
+                    "primary_detection": top_person,
+                    "detections": person_detections,
+                    "model": model_identifier,
+                    "inference_time_ms": inference_time_ms
+                }
+            else:
+                return {
+                    "success": True,
+                    "is_waste": False,
+                    "reason": "no_object_detected",
+                    "message": "No waste object detected in view. Align a campus waste item in the target box.",
+                    "confidence": 0.0,
+                    "primary_detection": None,
+                    "detections": [],
+                    "model": model_identifier,
+                    "inference_time_ms": inference_time_ms
+                }
         else:
             # No objects detected at all (e.g. plain wall/blank background)
             return {
                 "success": True,
                 "is_waste": False,
                 "reason": "no_object_detected",
-                "message": "No waste object detected in view. Align a waste item in the target box.",
+                "message": "No campus waste object detected in view. Align a waste item in the target box.",
                 "confidence": 0.0,
                 "primary_detection": None,
                 "detections": [],
@@ -332,9 +368,9 @@ async def classify_image(request: Request):
         category = primary["category"]
         conf_pct = round(primary["confidence"] * 100, 1)
 
-        # PERMANENT CAMPUS WASTE DICTIONARY REMAPPING
-        if raw_class in ["toothbrush", "pen", "pencil", "ballpoint_pen", "marker", "stationery"]:
-            display_name = "Pen / Stationery"
+        # STRICT CAMPUS WASTE DICTIONARY REMAPPING
+        if raw_class in ["toothbrush", "pen", "pencil", "ballpoint_pen", "marker", "stationery", "scissors"]:
+            display_name = "Pen / Campus Stationery"
             category = "Paper"
         elif raw_class in ["book", "books", "notebook", "notepad", "binder", "magazine", "paper", "sheet_of_paper", "document", "refrigerator", "microwave", "oven", "suitcase", "box"]:
             display_name = "Book / Notebook / Paper"
@@ -346,7 +382,6 @@ async def classify_image(request: Request):
             display_name = "Bottle / Waste Container"
             category = "Recyclable"
         else:
-            # Clean fallback name for any unspecified item
             display_name = "Campus Waste Material"
             category = "Recyclable"
 
